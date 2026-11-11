@@ -1,0 +1,36 @@
+:root { color-scheme: dark; font-family: "Malgun Gothic", sans-serif; }
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #06020b; }
+#forest { --x: 50vw; --y: 55vh; --pointer-x: 50vw; --pointer-y: 55vh; --radius: 300px; --power: 0; --stroke: 0; position: relative; width: 100%; height: 100%; isolation: isolate; touch-action: none; user-select: none; }
+.scene, .bloom, .spark, .vignette, #dust { position: absolute; inset: 0; pointer-events: none; }
+.scene { background: #7842bc var(--forest-image, url("assets/secret-forest.png")) center / cover no-repeat; background-blend-mode: luminosity; }
+.night { filter: brightness(.45) saturate(.8); opacity: var(--power); }
+.illuminated { filter: brightness(1.2) saturate(.9); opacity: var(--power); mask-image: radial-gradient(circle var(--radius) at var(--x) var(--y), #000 0%, #000e 16%, #000a 36%, #0005 58%, transparent 100%); }
+.illuminated::after { content: ""; position: absolute; inset: 0; background: #c19aff; opacity: .35; mix-blend-mode: soft-light; }
+.bloom { opacity: var(--power); background: radial-gradient(circle calc(var(--radius) * .85) at var(--x) var(--y), #bd8aff48, #a46bff18 50%, transparent 100%); mix-blend-mode: screen; }
+.spark { opacity: var(--stroke); background: radial-gradient(circle 85px at var(--pointer-x) var(--pointer-y), #f6edffb3 0%, #c699ff4d 12%, #ae72ff1c 40%, transparent 100%); mix-blend-mode: screen; }
+.vignette { background: radial-gradient(ellipse at 50% 48%, transparent 32%, #0c021b8c 100%); }
+#dust { width: 100%; height: 100%; }
+#fairy { position: absolute; top: 0; left: 0; width: clamp(190px, 24vw, 320px); aspect-ratio: 4 / 5; pointer-events: none; opacity: var(--power); will-change: transform, opacity; filter: drop-shadow(0 0 5px #f3dfff) drop-shadow(0 0 15px #a65cff); }
+#fairy::before { content: ""; position: absolute; inset: -26px; background: radial-gradient(ellipse, #c698ff33, transparent 65%); }
+#fairy-art { position: relative; display: block; width: 100%; height: 100%; object-fit: contain; }
+#face-portrait { position: absolute; left: 38%; top: 32%; width: 22%; height: 12%; border-radius: 50%; opacity: 0; transition: opacity .3s; box-shadow: 0 0 0 1px #f4ddff66; filter: none; }
+#fairy.has-face #face-portrait { opacity: 1; }
+.intro { position: absolute; top: 42px; left: 40px; right: 40px; text-align: center; pointer-events: none; text-shadow: 0 2px 20px #08020f; }
+.intro h1 { margin: 0 0 16px; color: #f4e8ff; font-size: clamp(25px, 3vw, 38px); font-weight: 400; letter-spacing: .06em; }
+.intro p { margin: 0; color: #dac5ed; font-size: 13px; line-height: 1.9; letter-spacing: .03em; }
+#hint { position: absolute; bottom: 30px; left: 32px; margin: 0; color: #d4bbeb99; font-size: 11px; letter-spacing: .06em; line-height: 2; pointer-events: none; transition: opacity 1.8s; text-shadow: 0 2px 12px #000; }
+#hint.hidden { opacity: 0; }
+.toolbar { position: absolute; bottom: 24px; right: 24px; display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+.toolbar button { display: flex; align-items: center; gap: 9px; padding: 11px 13px; color: #ead9ffb3; border: 1px solid #dac0ff30; background: #170b29b3; border-radius: 4px; font: inherit; font-size: 11px; cursor: pointer; transition: color .2s, background .2s; }
+.toolbar button[hidden] { display: none; }
+.toolbar button:hover, .toolbar button:focus-visible { background: #38204dcc; color: #fff3ff; }
+.toolbar button:focus-visible { outline: 2px solid #c69aef; outline-offset: 4px; }
+#camera-button:disabled { cursor: wait; opacity: .7; }
+.camera-dot { width: 6px; height: 6px; border-radius: 50%; background: #c8b2de; }
+#camera-button[aria-pressed="true"] .camera-dot { background: #d6ffc2; box-shadow: 0 0 8px #c5ff9f; }
+#camera-status { position: absolute; bottom: 78px; right: 24px; max-width: min(420px, calc(100vw - 48px)); margin: 0; color: #d6c3e8; font-size: 11px; line-height: 1.8; text-align: right; text-shadow: 0 1px 5px #000; pointer-events: none; }
+#fullscreen svg { width: 15px; height: 15px; }
+#notice { position: absolute; bottom: 126px; right: 24px; left: 24px; text-align: right; font-size: 12px; line-height: 1.7; color: #e9d5ff; pointer-events: none; }
+@media (max-width: 720px) { .intro { top: 28px; left: 20px; right: 20px; } .intro p { font-size: 11px; } .toolbar { bottom: 20px; right: 16px; left: 16px; justify-content: center; } .toolbar button { padding: 10px; } #camera-status { right: 16px; left: 16px; bottom: 108px; max-width: none; text-align: center; } #notice { right: 16px; left: 16px; bottom: 155px; text-align: center; } #hint { left: 16px; right: 16px; bottom: 198px; font-size: 10px; text-align: center; } }
+@media (prefers-reduced-motion: reduce) { #hint { transition: none; } }

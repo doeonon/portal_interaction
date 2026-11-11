@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ko">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>다른 세계로 · Portal Lab</title>
+<style>
+*{box-sizing:border-box}body{margin:0;background:#200b19;color:#fff0f7;font-family:system-ui,sans-serif;overflow:hidden}video,canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}video{transform:scaleX(-1);opacity:.8}canvas{touch-action:none}header{position:absolute;top:32px;left:36px;right:36px;text-align:center;pointer-events:none}small{letter-spacing:.24em;color:#ff9bcb;font-size:11px}h1{font-size:30px;font-weight:500;margin:10px 0}p{color:#e8b4ce;font-size:14px;line-height:1.7}footer{position:absolute;bottom:28px;left:36px;right:36px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;justify-content:center;text-align:center}button{border:1px solid #ffffff35;border-radius:30px;padding:12px 20px;background:#55203e;color:white;cursor:pointer}button:first-child{background:#ffadd4;color:#4b1531}button:disabled{opacity:.5;cursor:wait}#status{font-size:13px;color:#f3c8df;flex-basis:100%;text-align:center}#hint{position:absolute;top:224px;left:36px;right:36px;text-align:center;font-size:12px;color:#d99ab9;pointer-events:none} @media(max-width:600px){header{left:20px;right:20px;top:20px}h1{font-size:24px}#hint{display:none}footer{left:20px;right:20px}#status{width:100%}}
+</style>
+<video id="camera" autoplay playsinline muted></video><canvas id="scene"></canvas>
+<header><small>PORTAL LAB / EXPERIMENT 01</small><h1>하트를 그려 당신의 마음을 전달해보세요</h1><p>마우스를 누른 채 하트의 윤곽을 한 번에 그리고 놓아보세요.<br>위쪽은 오목하게, 아래쪽은 뾰족하게 그려 시작점으로 돌아오세요.<br>웹캠을 켜고 좌우로 움직이면 배경이 채워져요.</p></header>
+<div id="hint">하트를 그리면 뾰로롱 ♪ · 핑크빛 포털</div>
+<footer><button id="start">웹캠 켜기</button><button id="reset">포털 지우기</button><button id="sound" aria-pressed="true">효과음 켜짐 ♪</button><span id="status" role="status" aria-live="polite">웹캠을 켜세요. 미확보 배경은 임시로 늘려 채웁니다.</span></footer>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/selfie_segmentation.js" crossorigin="anonymous"></script>
+<script>
+// 카메라 영상은 메모리에서만 처리하며 녹화·업로드하지 않습니다.
+const canvas=document.querySelector('#scene'),ctx=canvas.getContext('2d'),video=document.querySelector('#camera'),status=document.querySelector('#status');
+let w,h,points=[],drawing=false,portal=null,activePointer=null,stream,cleanBackground=null,captureTimer=null,strokeHearts=[],particleCarry=0;
+let audioContext=null,audioMaster=null,soundEnabled=true,lastChime=-Infinity,chimeStep=0;
+function prepareAudio(){
+ const AudioEngine=globalThis.AudioContext||globalThis.webkitAudioContext;
+ if(!AudioEngine)return false;
+ if(!audioContext||audioContext.state==='closed'){
+  audioContext=new AudioEngine();audioMaster=audioContext.createGain();audioMaster.gain.value=soundEnabled ? .35 : 0;audioMaster.connect(audioContext.destination);
+ }
+ if(audioContext.state==='suspended')audioContext.resume().catch(()=>{});
+ return true;
+}
+function playDrawingChime(x){
+ if(!soundEnabled)return;
+ const now=performance.now();if(now-lastChime<170)return;
+ try{
+  if(!prepareAudio()||audioContext.state!=='running')return;lastChime=now;
+  const start=audioContext.currentTime,melody=[0,2,4,7,9,7,4,2],root=660*Math.pow(2,melody[chimeStep++%melody.length]/12);
+  const pan=audioContext.createStereoPanner?audioContext.createStereoPanner():audioContext.createGain();
+  if(pan.pan)pan.pan.value=Math.max(-.8,Math.min(.8,(x/w*2-1)*.8));pan.connect(audioMaster);
+  let voices=6;
+  for(let note=0;note<3;note++)for(let harmonic=1;harmonic<=2;harmonic++){
+   const oscillator=audioContext.createOscillator(),gain=audioContext.createGain(),at=start+note*.055,frequency=root*Math.pow(2,note*4/12)*harmonic;
+   oscillator.type='sine';oscillator.frequency.setValueAtTime(frequency*.94,at);oscillator.frequency.exponentialRampToValueAtTime(frequency,at+.035);
+   gain.gain.setValueAtTime(.0001,at);gain.gain.exponentialRampToValueAtTime(harmonic===1 ? .12 : .025,at+.012);gain.gain.exponentialRampToValueAtTime(.0001,at+.3);
+   oscillator.connect(gain);gain.connect(pan);oscillator.start(at);oscillator.stop(at+.32);
+   oscillator.onended=()=>{oscillator.disconnect();gain.disconnect();if(--voices===0)pan.disconnect();};
+  }
+ }catch(e){/* Drawing remains available when audio is unavailable. */}
+}
+document.querySelector('#sound').onclick=function(){
+ soundEnabled=!soundEnabled;this.textContent=soundEnabled?'효과음 켜짐 ♪':'효과음 꺼짐';this.setAttribute('aria-pressed',String(soundEnabled));
+ try{if(prepareAudio())audioMaster.gain.setTargetAtTime(soundEnabled ? .35 : 0,audioContext.currentTime,.02);}catch(e){}
+};
+function resize(){w=innerWidth;h=innerHeight;const d=Math.min(devicePixelRatio,2);canvas.width=w*d;canvas.height=h*d;ctx.setTransform(d,0,0,d,0,0);portal=null;points=[];strokeHearts=[];drawing=false;activePointer=null;}
+addEventListener('resize',resize);resize();
+// Input adapter: future hand landmarks can call beginStroke / moveStroke / endStroke.
+function beginStroke(x,y){points=[{x,y}];drawing=true;particleCarry=0;emitHeartPair(x,y);lastChime=-Infinity;playDrawingChime(x);}
+function moveStroke(x,y){
+ if(!drawing)return;
+ const previous=points.at(-1),dx=x-previous.x,dy=y-previous.y,distance=Math.hypot(dx,dy);
+ if(distance<=3)return;
+ // Emit along the travelled segment, including fast mouse movements.
+ const spacing=Math.max(10,distance/20),born=performance.now();
+ for(let d=spacing-particleCarry;d<=distance;d+=spacing)emitHeartPair(previous.x+dx*d/distance,previous.y+dy*d/distance,born);
+ particleCarry=(particleCarry+distance)%spacing;
+ points.push({x,y});
+ playDrawingChime(x);
+}
+function emitHeartPair(x,y,born=performance.now()){
+ for(const side of [-1,1])strokeHearts.push({x,y,born,vx:side*(45+Math.random()*85),vy:-20-Math.random()*65,size:4+Math.random()*5,life:.75+Math.random()*.55,angle:(Math.random()-.5)*.6,spin:side*(.3+Math.random()),color:['#ff65ad','#ffa1ce','#ffe0ee','#ff3d91'][Math.floor(Math.random()*4)]});
+ if(strokeHearts.length>240)strokeHearts.splice(0,strokeHearts.length-240);
+}
+function drawStrokeHearts(t){
+ strokeHearts=strokeHearts.filter(p=>t-p.born<p.life*1000);
+ ctx.save();
+ for(const p of strokeHearts){
+  const age=Math.max(0,(t-p.born)/1000),fade=1-age/p.life,spread=(1-Math.exp(-1.5*age))/1.5;
+  ctx.save();ctx.translate(p.x+p.vx*spread,p.y+p.vy*age+20*age*age);ctx.rotate(p.angle+p.spin*age);
+  const size=p.size*(.65+.35*fade);ctx.scale(size,size);ctx.globalAlpha=fade*fade;
+  ctx.fillStyle=p.color;ctx.shadowColor=p.color;ctx.shadowBlur=8;
+  ctx.beginPath();ctx.moveTo(0,-.35);ctx.bezierCurveTo(-.6,-1.1,-1.4,-.35,-.8,.3);ctx.bezierCurveTo(-.5,.65,-.2,.8,0,1);ctx.bezierCurveTo(.2,.8,.5,.65,.8,.3);ctx.bezierCurveTo(1.4,-.35,.6,-1.1,0,-.35);ctx.closePath();ctx.fill();ctx.restore();
+ }
+ ctx.restore();
+}
+function endStroke(){if(!drawing)return;drawing=false;const result=recognizeHeart(points);if(result){
+ const born=performance.now(),fit=Math.min(1,Math.max(1,(w-48)*.76)/(result.rx*2),Math.max(1,(h-48)*.76)/(result.ry*2));
+ const rx=result.rx*fit,ry=result.ry*fit;
+ portal={...result,rx,ry,r:result.r*fit,x:Math.max(rx+24,Math.min(w-rx-24,result.x)),y:Math.max(ry+24,Math.min(h-ry-24,result.y)),born,lastMotion:born+650,vx:(Math.random()<.5?-1:1)*(35+Math.random()*20),vy:(Math.random()<.5?-1:1)*(22+Math.random()*16)};
+ status.textContent=stream?'하트 포털이 배경을 떠다녀요. 카메라를 보며 움직여 보세요.':'하트 포털이 열려 배경을 떠다녀요. 웹캠을 켜면 포털 안에 내 모습이 나타나요.';
+ }else status.textContent='위쪽 홈과 아래쪽 꼭짓점을 살려 하트를 그리고, 시작점 가까이 돌아와 주세요.';points=[];}
+function updatePortalMotion(t){
+ if(!portal||t<portal.born+650)return;
+ const p=portal,dt=Math.max(0,Math.min((t-p.lastMotion)/1000,.05));p.lastMotion=t;
+ p.x+=p.vx*dt;p.y+=p.vy*dt;
+ // Keep the entire heart and its glow on screen, reflecting at each edge.
+ for(const [axis,velocity,radius,extent] of [['x','vx',p.rx,w],['y','vy',p.ry,h]]){
+  const min=radius+24,max=extent-radius-24;
+  if(max<=min){p[axis]=extent/2;continue;}
+  if(p[axis]<min){p[axis]=Math.min(max,2*min-p[axis]);p[velocity]=Math.abs(p[velocity]);}
+  else if(p[axis]>max){p[axis]=Math.max(min,2*max-p[axis]);p[velocity]=-Math.abs(p[velocity]);}
+ }
+}
+// One outline is shared by gesture matching, clipping, glow and particles.
+function heartPoint(t){return {x:Math.pow(Math.sin(t),3),y:-(13*Math.cos(t)-5*Math.cos(2*t)-2*Math.cos(3*t)-Math.cos(4*t))/16};}
+const heartRaw=Array.from({length:180},(_,i)=>heartPoint(i/180*Math.PI*2));
+const heartTop=Math.min(...heartRaw.map(p=>p.y)),heartBottom=Math.max(...heartRaw.map(p=>p.y));
+const heartOutline=heartRaw.map(p=>({x:p.x,y:(p.y-heartTop)/(heartBottom-heartTop)*2-1}));
+function traceHeart(x,y,rx,ry){ctx.beginPath();heartOutline.forEach((p,i)=>i?ctx.lineTo(x+p.x*rx,y+p.y*ry):ctx.moveTo(x+p.x*rx,y+p.y*ry));ctx.closePath();}
+function paintLittleHeart(x,y,size,angle,color,alpha){
+ ctx.save();ctx.translate(x,y);ctx.rotate(angle);ctx.scale(size,size);ctx.globalAlpha=alpha;ctx.fillStyle=color;ctx.shadowColor=color;ctx.shadowBlur=9;
+ ctx.beginPath();ctx.moveTo(0,-.35);ctx.bezierCurveTo(-.6,-1.1,-1.4,-.35,-.8,.3);ctx.bezierCurveTo(-.5,.65,-.2,.8,0,1);ctx.bezierCurveTo(.2,.8,.5,.65,.8,.3);ctx.bezierCurveTo(1.4,-.35,.6,-1.1,0,-.35);ctx.closePath();ctx.fill();ctx.restore();
+}
+// Sample by outline length so hearts flow evenly through both lobes and the tip.
+const edgeLengths=[0];
+for(let i=1;i<=heartOutline.length;i++){const a=heartOutline[i-1],b=heartOutline[i%heartOutline.length];edgeLengths.push(edgeLengths.at(-1)+Math.hypot(b.x-a.x,b.y-a.y));}
+function portalEdge(phase,rx,ry){
+ const distance=((phase%1+1)%1)*edgeLengths.at(-1);let i=1;
+ while(i<edgeLengths.length-1&&edgeLengths[i]<distance)i++;
+ const a=heartOutline[i-1],b=heartOutline[i%heartOutline.length],f=(distance-edgeLengths[i-1])/(edgeLengths[i]-edgeLengths[i-1]||1),dx=(b.x-a.x)*rx,dy=(b.y-a.y)*ry,length=Math.hypot(dx,dy)||1;
+ return {x:(a.x+(b.x-a.x)*f)*rx,y:(a.y+(b.y-a.y)*f)*ry,nx:dy/length,ny:-dx/length};
+}
+function drawPortalMagic(x,y,rx,ry,scale,open,t,born){
+ const elapsed=Math.max(0,t-born);ctx.save();ctx.globalCompositeOperation='lighter';
+ // Expanding heart-shaped ripples and a travelling ribbon of light.
+ for(let ring=0;ring<3;ring++){
+  const phase=(elapsed/2100+ring/3)%1,spread=phase*48;
+  ctx.globalAlpha=open*(1-phase)*(1-phase)*.45;ctx.strokeStyle=ring%2?'#ff63ad':'#ffb7df';ctx.shadowColor='#ff419e';ctx.shadowBlur=20;ctx.lineWidth=2-phase;
+  traceHeart(x,y,(rx+spread)*scale,(ry+spread)*scale);ctx.stroke();
+ }
+ ctx.globalAlpha=open*.8;ctx.strokeStyle='#ffe9f6';ctx.lineWidth=1.5;ctx.setLineDash([3,11,16,11]);ctx.lineDashOffset=-elapsed*.045;
+ traceHeart(x,y,(rx+4)*scale,(ry+4)*scale);ctx.stroke();ctx.setLineDash([]);
+ for(let i=0;i<34;i++){
+  const edge=portalEdge(i/34+elapsed*.000065,rx*scale,ry*scale),pulse=.75+.25*Math.sin(elapsed*.004+i);
+  paintLittleHeart(x+edge.x,y+edge.y,(3.5+i%3)*pulse*scale,Math.sin(elapsed*.002+i)*.2,i%3?'#ff8bc6':'#fff0fa',open*.9);
+ }
+ // Hearts peel away from the contour along its outward normal.
+ for(let i=0;i<52;i++){
+  const age=(elapsed/1700+i*.61803398875)%1,edge=portalEdge(i/52+elapsed*.000035,rx*scale,ry*scale),spread=(5+age*age*64)*scale;
+  paintLittleHeart(x+edge.x+edge.nx*spread,y+edge.y+edge.ny*spread,(3+i%4)*(1-age*.45)*scale,Math.sin(i+elapsed*.001)*.35,i%2?'#ff66b2':'#ffd4ed',open*Math.sin(Math.PI*age)*.75);
+ }
+ ctx.restore();
+}
+function recognizeHeart(p){
+ if(p.length<20)return null;
+ const minX=Math.min(...p.map(q=>q.x)),maxX=Math.max(...p.map(q=>q.x)),minY=Math.min(...p.map(q=>q.y)),maxY=Math.max(...p.map(q=>q.y));
+ const width=maxX-minX,height=maxY-minY;
+ if(width<70||height<70||width/height<.65||width/height>1.65||Math.hypot(p[0].x-p.at(-1).x,p[0].y-p.at(-1).y)>Math.min(width,height)*.25)return null;
+ const rawNormalized=p.map(q=>({x:(q.x-minX)/width,y:(q.y-minY)/height}));
+ // Smooth small hand tremors before measuring the outline length.
+ const normalized=rawNormalized.map((q,i)=>{let x=0,y=0;for(let offset=-2;offset<=2;offset++){const v=rawNormalized[(i+offset+rawNormalized.length)%rawNormalized.length];x+=v.x;y+=v.y;}return {x:x/5,y:y/5};});
+ // Resample by travelled distance so pointer speed does not bias the match.
+ const closed=[...normalized,normalized[0]],distances=[0];
+ for(let i=1;i<closed.length;i++)distances.push(distances[i-1]+Math.hypot(closed[i].x-closed[i-1].x,closed[i].y-closed[i-1].y));
+ const length=distances.at(-1);
+ if(length<2.6||length>4.8)return null;
+ const samples=[];let segment=1;
+ for(let i=0;i<120;i++){const d=i/120*length;while(segment<distances.length-1&&distances[segment]<d)segment++;const a=closed[segment-1],b=closed[segment],f=(d-distances[segment-1])/(distances[segment]-distances[segment-1]||1);samples.push({x:a.x+(b.x-a.x)*f,y:a.y+(b.y-a.y)*f});}
+ const topIn=(left,right)=>Math.min(...samples.filter(q=>q.x>=left&&q.x<=right).map(q=>q.y));
+ const notch=topIn(.44,.56),leftLobe=topIn(.1,.4),rightLobe=topIn(.6,.9);
+ const tip=samples.filter(q=>q.y>.92);
+ if(!Number.isFinite(notch)||notch<.075||notch>.5||leftLobe>.2||rightLobe>.2||notch-Math.max(leftLobe,rightLobe)<.06||!tip.length||tip.some(q=>Math.abs(q.x-.5)>.27))return null;
+ const template=heartOutline.map(q=>({x:(q.x+1)/2,y:(q.y+1)/2}));
+ const match=(a,b)=>a.reduce((sum,q)=>sum+Math.min(...b.map(v=>(q.x-v.x)**2+(q.y-v.y)**2)),0)/a.length;
+ if(Math.sqrt((match(samples,template)+match(template,samples))/2)>.105)return null;
+ // Reject repeated loops and scribbles by checking the enclosed area.
+ let area=0;for(let i=0;i<samples.length;i++){const a=samples[i],b=samples[(i+1)%samples.length];area+=a.x*b.y-b.x*a.y;}
+ if(Math.abs(area)/2<.4||Math.abs(area)/2>.85)return null;
+ return {x:(minX+maxX)/2,y:(minY+maxY)/2,r:Math.max(width,height)/2,rx:width/2,ry:height/2};
+}
+canvas.addEventListener('pointerdown',e=>{if(activePointer!==null||e.button!==0)return;activePointer=e.pointerId;canvas.setPointerCapture(e.pointerId);beginStroke(e.clientX,e.clientY);});
+canvas.addEventListener('pointermove',e=>{if(e.pointerId===activePointer)moveStroke(e.clientX,e.clientY);});
+canvas.addEventListener('pointerup',e=>{if(e.pointerId!==activePointer)return;moveStroke(e.clientX,e.clientY);endStroke();activePointer=null;});
+canvas.addEventListener('pointercancel',()=>{drawing=false;points=[];activePointer=null;});
+document.querySelector('#reset').onclick=()=>{portal=null;points=[];strokeHearts=[];drawing=false;activePointer=null;status.textContent='새로운 하트를 그려 포털을 열어보세요.';};
+document.querySelector('#start').onclick=async function(){if(stream){stream.getTracks().forEach(t=>t.stop());stream=null;cleanBackground=null;portal=null;video.srcObject=null;this.textContent='웹캠 켜기';status.textContent='웹캠을 껐어요.';return;}this.disabled=true;try{if(!navigator.mediaDevices?.getUserMedia)throw Error('unsupported');stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'user'},audio:false});video.srcObject=stream;await video.play();this.textContent='웹캠 끄기';status.textContent='인물 분리 준비 중…';await prepareSegmentation();}catch(e){stream?.getTracks().forEach(t=>t.stop());stream=null;this.textContent='웹캠 다시 시도';status.textContent=e.name==='NotAllowedError'?'카메라 권한이 필요해요. 브라우저의 카메라 접근을 허용해 주세요.':'카메라 또는 인식 프로그램을 불러오지 못했어요. 인터넷 연결과 카메라를 확인하고 Chrome·Edge에서 다시 열어 주세요.';}finally{this.disabled=false;}};
+// Mirror and fit the whole camera view inside the portal, independent of its location.
+function drawPortalSelf(x,y,r,t){
+  if(!stream||video.readyState<2||!video.videoWidth)return;
+  const size=r*2,scale=Math.max(size/(backgroundReady?bw:video.videoWidth),size/(backgroundReady?bh:video.videoHeight));
+  const vw=(backgroundReady?bw:video.videoWidth)*scale,vh=(backgroundReady?bh:video.videoHeight)*scale;
+  ctx.save();
+  ctx.translate(x,y);ctx.scale(-1,1);
+  ctx.globalAlpha=.88;
+  ctx.filter='saturate(0.7) contrast(1.15)';
+  ctx.drawImage(backgroundReady?person:video,-vw/2,-vh/2,vw,vh);
+  ctx.filter='none';ctx.globalAlpha=1;
+  // Color the live reflection to make it feel part of the other world.
+  ctx.globalCompositeOperation='screen';
+  const tint=ctx.createLinearGradient(0,-r,0,r);
+  tint.addColorStop(0,'rgba(255,75,158,.3)');
+  tint.addColorStop(1,'rgba(255,170,213,.24)');
+  ctx.fillStyle=tint;ctx.fillRect(-r,-r,size,size);
+  ctx.globalCompositeOperation='source-over';
+  const shade=ctx.createRadialGradient(0,0,r*.45,0,0,r);
+  shade.addColorStop(0,'transparent');shade.addColorStop(1,'rgba(56,9,34,.7)');
+  ctx.fillStyle=shade;ctx.fillRect(-r,-r,size,size);
+  ctx.restore();
+}
+
+const background=document.createElement('canvas'),person=document.createElement('canvas'),sample=document.createElement('canvas'),mask=document.createElement('canvas');
+const bw=480,bh=360;
+for(const c of [background,person,sample,mask]){c.width=bw;c.height=bh;}
+const bc=background.getContext('2d'),pc=person.getContext('2d'),sc=sample.getContext('2d',{willReadFrequently:true}),mc=mask.getContext('2d',{willReadFrequently:true});
+let backgroundReady=false,segmenter=null,processing=false;
+const known=new Uint8Array(bw*bh);
+function drawCover(source){const scale=Math.max(w/source.width,h/source.height);ctx.save();ctx.translate(w,0);ctx.scale(-1,1);ctx.drawImage(source,(w-source.width*scale)/2,(h-source.height*scale)/2,source.width*scale,source.height*scale);ctx.restore();}
+async function prepareSegmentation(){
+ if(typeof SelfieSegmentation==='undefined')throw Error('model load');
+ if(!segmenter){segmenter=new SelfieSegmentation({locateFile:file=>'https://cdn.jsdelivr.net/npm/@mediapipe/selfie_segmentation@0.1.1675465747/'+file});segmenter.setOptions({modelSelection:1});segmenter.onResults(updateBackground);}
+ known.fill(0);backgroundReady=false;
+ if(!processing)processCamera();
+}
+async function processCamera(){
+ if(!stream){processing=false;return;}processing=true;
+ try{await segmenter.send({image:video});}catch(e){status.textContent='인물 분리를 불러오지 못했어요. 인터넷 연결 후 웹캠을 다시 켜 주세요.';processing=false;return;}
+ setTimeout(processCamera,45);
+}
+function updateBackground(results){
+ sc.drawImage(results.image,0,0,bw,bh);mc.clearRect(0,0,bw,bh);mc.drawImage(results.segmentationMask,0,0,bw,bh);
+ const frame=sc.getImageData(0,0,bw,bh),m=mc.getImageData(0,0,bw,bh),out=bc.getImageData(0,0,bw,bh);
+ // Keep only confidently visible background pixels across frames.
+ for(let i=0;i<known.length;i++){const k=i*4;if(m.data[k]<20){known[i]=1;out.data[k]=frame.data[k];out.data[k+1]=frame.data[k+1];out.data[k+2]=frame.data[k+2];out.data[k+3]=255;}}
+ // Unknown areas borrow the nearest available room pixel in each row.
+ for(let y=0;y<bh;y++){let nearest=-1;const right=new Int32Array(bw);right.fill(-1);for(let x=bw-1;x>=0;x--){if(known[y*bw+x])nearest=x;right[x]=nearest;}let left=-1;for(let x=0;x<bw;x++){const i=y*bw+x,k=i*4;if(known[i]){left=x;continue;}const rx=right[x],nx=left<0?rx:rx<0?left:x-left<rx-x?left:rx;if(nx>=0){const q=(y*bw+nx)*4;out.data[k]=frame.data[q];out.data[k+1]=frame.data[q+1];out.data[k+2]=frame.data[q+2];}else{out.data[k]=70;out.data[k+1]=75;out.data[k+2]=80;}out.data[k+3]=255;}}
+ bc.putImageData(out,0,0);
+ pc.clearRect(0,0,bw,bh);pc.globalCompositeOperation='source-over';pc.drawImage(results.segmentationMask,0,0,bw,bh);pc.globalCompositeOperation='source-in';pc.drawImage(results.image,0,0,bw,bh);pc.globalCompositeOperation='source-over';
+ if(!backgroundReady)status.textContent='준비 완료! 좌우로 움직이면 배경이 채워져요. 하트를 그려 포털을 여세요.';backgroundReady=true;
+}
+
+function frame(t){updatePortalMotion(t);ctx.clearRect(0,0,w,h);if(!stream){const bg=ctx.createRadialGradient(w*.5,h*.5,0,w*.5,h*.5,w*.7);bg.addColorStop(0,'#632141');bg.addColorStop(1,'#200b19');ctx.fillStyle=bg;ctx.fillRect(0,0,w,h);}if(portal&&backgroundReady)drawCover(background);if(stream){ctx.fillStyle='rgba(95,16,54,.18)';ctx.fillRect(0,0,w,h);}if(portal){const{x,y,r,rx,ry,born}=portal,open=Math.min(1,(t-born)/650),scale=1-Math.pow(1-open,3),R=r*scale;ctx.save();traceHeart(x,y,rx*scale,ry*scale);ctx.clip();const g=ctx.createLinearGradient(x,y-R,x,y+R);g.addColorStop(0,'#3b0c2a');g.addColorStop(.55,'#be4d88');g.addColorStop(1,'#ff9bc7');ctx.fillStyle=g;ctx.fillRect(x-R,y-R,R*2,R*2);for(let i=0;i<90;i++){const sx=x+Math.sin(i*127.1)*r,sy=y+Math.cos(i*311.7)*r;ctx.fillStyle=`rgba(255,225,242,${.4+.4*Math.sin(t*.001+i)})`;ctx.fillRect(sx,sy,1.5,1.5);}for(let j=0;j<5;j++){ctx.beginPath();ctx.moveTo(x-r,y+r);for(let a=-r;a<=r;a+=5)ctx.lineTo(x+a,y+r*.25+j*r*.19+Math.sin(a/r*3+j+t*.0002)*r*.17);ctx.lineTo(x+r,y+r);ctx.fillStyle=['#6e244c','#88315c','#a63c6a','#c65080','#e96a9e'][j];ctx.fill();}drawPortalSelf(x,y,r,t);ctx.restore();ctx.save();ctx.globalAlpha=open;ctx.shadowColor='#ff63ad';ctx.shadowBlur=26;ctx.strokeStyle='#ffd4e9';ctx.lineWidth=3;traceHeart(x,y,rx*scale,ry*scale);ctx.stroke();for(let i=0;i<65;i++){const edge=heartOutline[Math.floor((i/65+t*.000035)%1*heartOutline.length)],jitter=Math.sin(i*8+t*.003)*4;ctx.fillStyle=i%3?'#ff87c1':'#fff0f7';ctx.beginPath();ctx.arc(x+edge.x*(rx*scale+jitter),y+edge.y*(ry*scale+jitter),1+Math.sin(i)*.6,0,7);ctx.fill();}ctx.restore();drawPortalMagic(x,y,rx,ry,scale,open,t,born);}if(points.length){ctx.save();ctx.strokeStyle='#ffd0e8';ctx.lineWidth=3;ctx.lineCap='round';ctx.shadowColor='#ff4fa0';ctx.shadowBlur=14;ctx.beginPath();points.forEach((p,i)=>i?ctx.lineTo(p.x,p.y):ctx.moveTo(p.x,p.y));ctx.stroke();ctx.restore();}drawStrokeHearts(t);requestAnimationFrame(frame);}requestAnimationFrame(frame);
+</script>
+</html>
