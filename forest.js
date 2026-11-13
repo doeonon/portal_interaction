@@ -1,117 +1,353 @@
 const forest = document.querySelector('#forest');
-const canvas = document.querySelector('#dust');
+const canvas = document.querySelector('#flowers');
 const ctx = canvas.getContext('2d');
+const trailCanvas = document.querySelector('#flower-trail');
+const trailContext = trailCanvas.getContext('2d');
+const flowerMission = document.querySelector('#flower-mission');
+const lightProgress = document.querySelector('#light-progress');
+const lightCount = document.querySelector('#light-count');
 const hint = document.querySelector('#hint');
 const fullscreen = document.querySelector('#fullscreen');
 const notice = document.querySelector('#notice');
 const fairy = document.querySelector('#fairy');
+const fairyArt = document.querySelector('#fairy-art');
+const fairyCount = document.querySelector('#fairy-count');
+const fairyProgress = document.querySelector('#fairy-progress');
+const fairyMessage = document.querySelector('#fairy-message');
+const hiddenFairies = Array.from({ length: 10 }, (_, index) => {
+  const node = index === 0 ? fairy : document.createElement('div');
+  if (index > 0) {
+    const sprite = fairyArt.cloneNode();
+    sprite.removeAttribute('id');
+    node.className = 'hidden-fairy';
+    node.append(sprite);
+    fairy.parentElement.append(node);
+  }
+  return { node, found: false, x: .25 + Math.random() * .5, y: .25 + Math.random() * .5 };
+});
+const chimeButton = document.querySelector('#chime-button');
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
-let width, height, particles = [], lastTime = performance.now(), hasMoved = false;
+let flowers = [], clickStart = null;
+let foundCount = 0, messageTimer;
+let flowerStage = false, forestBright = false, lightCharge = 0;
+let trailPoint = null, swingSample = null, previousSwing = null, lastShake = -Infinity;
+let flowerSparks = [];
+let chimeAudio, chimeVolume, chimeEnabled = false, lastChime = -Infinity, chimeStep = 0, chimeGain = 0;
+let width, height, lastTime = performance.now(), hasMoved = false;
 let targetX = innerWidth / 2, targetY = innerHeight * .55;
-let lightX = targetX, lightY = targetY, power = 0, active = false;
-let fairyX = targetX + 40, fairyY = targetY - 40, lastMotionTime = -Infinity;
-let pressed = false, strokePower = 0, lastStrokeTime = -Infinity;
-let previousPointer = null;
-let fairyHalfWidth = 160, fairyHalfHeight = 200;
+let lensOpacity = 0, active = false;
 
 function resize() {
+  let previousTrail;
+  if (flowerStage && !forestBright) {
+    previousTrail = document.createElement('canvas');
+    previousTrail.width = trailCanvas.width;
+    previousTrail.height = trailCanvas.height;
+    previousTrail.getContext('2d').drawImage(trailCanvas, 0, 0);
+  }
   width = innerWidth; height = innerHeight;
-  fairyHalfWidth = fairy.offsetWidth / 2; fairyHalfHeight = fairy.offsetHeight / 2;
+  const columns = width >= height ? 5 : 2;
+  const rows = hiddenFairies.length / columns;
+  hiddenFairies.forEach((fairy, index) => {
+    const left = 6 + 88 * (index % columns + fairy.x) / columns;
+    const top = 20 + 59 * (Math.floor(index / columns) + fairy.y) / rows;
+    fairy.node.style.left = `${left}%`;
+    fairy.node.style.top = `${top}%`;
+    fairy.worldX = width * left / 100;
+    fairy.worldY = height * top / 100;
+  });
   const scale = Math.min(devicePixelRatio || 1, 2);
   canvas.width = Math.round(width * scale); canvas.height = Math.round(height * scale);
   ctx.setTransform(scale, 0, 0, scale, 0, 0);
-  forest.style.setProperty('--radius', `${Math.max(210, Math.min(390, Math.min(width, height) * .42))}px`);
+  trailCanvas.width = canvas.width; trailCanvas.height = canvas.height;
+  trailContext.setTransform(scale, 0, 0, scale, 0, 0);
+  if (previousTrail) trailContext.drawImage(previousTrail, 0, 0, width, height);
+  resetFlowerMotion();
   targetX = Math.min(targetX, width); targetY = Math.min(targetY, height);
-  previousPointer = null;
 }
 resize();
 addEventListener('resize', resize);
 
-function emit(x, y, now) {
-  particles.push({
-    x: x + (Math.random() - .5) * 16, y: y + (Math.random() - .5) * 16,
-    vx: (Math.random() - .5) * 13, vy: -3 - Math.random() * 10,
-    radius: .7 + Math.random() ** 2 * 1.7, phase: Math.random() * Math.PI * 2,
-    born: now, life: 2400 + Math.random() * 2400,
-    color: '#ffffff'
+chimeButton.addEventListener('click', async () => {
+  chimeButton.disabled = true;
+  try {
+    if (!chimeEnabled) {
+      if (!chimeAudio) {
+        chimeAudio = new AudioContext();
+        chimeVolume = chimeAudio.createGain();
+        chimeVolume.gain.value = 0;
+        chimeVolume.connect(chimeAudio.destination);
+      }
+      await chimeAudio.resume();
+    }
+    chimeEnabled = !chimeEnabled;
+    lastChime = -Infinity;
+    chimeGain = 0;
+    chimeVolume.gain.setTargetAtTime(0, chimeAudio.currentTime, .045);
+    chimeButton.setAttribute('aria-pressed', String(chimeEnabled));
+    chimeButton.textContent = chimeEnabled ? '효과음 끄기' : '효과음 켜기';
+  } catch {
+    notice.textContent = '효과음을 시작하지 못했어요. Chrome에서 다시 켜주세요.';
+  } finally { chimeButton.disabled = false; }
+});
+
+function playChime(now) {
+  lastChime = now;
+  const notes = [783.99, 987.77, 1174.66, 1318.51, 1567.98, 1975.53];
+  const start = chimeStep++ % 4;
+  for (let i = 0; i < 3; i++) {
+    const at = chimeAudio.currentTime + i * .095;
+    for (const [ratio, volume, decay] of [[1, .062, 1.55], [2.76, .012, .74], [5.08, .003, .28]]) {
+      const tone = chimeAudio.createOscillator(), envelope = chimeAudio.createGain();
+      tone.frequency.value = notes[start + i] * ratio;
+      envelope.gain.setValueAtTime(.0001, at);
+      envelope.gain.exponentialRampToValueAtTime(volume * (1 - i * .16), at + .018);
+      envelope.gain.exponentialRampToValueAtTime(.0001, at + decay);
+      tone.connect(envelope); envelope.connect(chimeVolume);
+      tone.start(at); tone.stop(at + decay + .02);
+      tone.onended = () => { tone.disconnect(); envelope.disconnect(); };
+    }
+  }
+}
+
+function updateChime(now) {
+  if (!chimeEnabled || chimeAudio.state !== 'running') return;
+  const range = Math.max(125, Math.min(230, Math.min(width, height) * .27));
+  let distance = range;
+  if (active) {
+    for (const fairy of hiddenFairies) {
+      if (fairy.found) continue;
+      distance = Math.min(distance, Math.hypot(targetX - fairy.worldX, targetY - fairy.worldY));
+    }
+  }
+  const closeness = 1 - distance / range;
+  const gain = Math.round(.6 * closeness ** 1.45 * 1000) / 1000;
+  if (gain !== chimeGain) {
+    chimeGain = gain;
+    chimeVolume.gain.setTargetAtTime(gain, chimeAudio.currentTime, .09);
+  }
+  if (closeness > .04 && now - lastChime >= 1650 - 650 * closeness) playChime(now);
+}
+
+function plantFlower(x, y, now) {
+  flowers.push({ x, y, born: now, size: .8 + Math.random() * .55, tilt: (Math.random() - .5) * .55 });
+  if (flowers.length > 100) flowers.splice(0, flowers.length - 100);
+}
+
+function showFlowerStage() {
+  flowerStage = true;
+  endPointer();
+  forest.classList.add('flower-stage');
+  forest.setAttribute('aria-label', '마우스를 움직이면 방울꽃이 따라오는 숲');
+  document.querySelector('#fairy-intro').hidden = true;
+  document.querySelector('#flower-intro').hidden = false;
+  stopCamera();
+  flowerMission.showModal();
+}
+
+function resetFlowerMotion() {
+  trailPoint = null;
+  swingSample = null;
+  previousSwing = null;
+}
+
+function leaveLight(x, y) {
+  const radius = Math.max(68, Math.min(116, Math.min(width, height) * .14));
+  const glow = trailContext.createRadialGradient(x, y, 0, x, y, radius);
+  glow.addColorStop(0, 'rgba(255, 219, 161, .18)');
+  glow.addColorStop(.45, 'rgba(231, 176, 255, .10)');
+  glow.addColorStop(1, 'rgba(231, 176, 255, 0)');
+  trailContext.fillStyle = glow;
+  trailContext.fillRect(x - radius, y - radius, 2 * radius, 2 * radius);
+}
+
+function shakeFlower(x, y, now, distance) {
+  lastShake = now;
+  for (let i = 0; i < (reducedMotion ? 8 : 24); i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 42 + Math.random() * 150;
+    flowerSparks.push({ x, y, born: now, life: 550 + Math.random() * 670,
+      vx: Math.cos(angle) * speed, vy: Math.sin(angle) * speed,
+      size: 1 + Math.random() * 2.5, color: ['#fff6d8', '#e8bcff', '#ffcde2'][i % 3] });
+  }
+  if (flowerSparks.length > 180) flowerSparks.splice(0, flowerSparks.length - 180);
+  lightCharge = Math.min(100, lightCharge + Math.max(5, Math.min(12, Math.round(distance * .22))));
+  lightProgress.value = lightCharge;
+  lightCount.textContent = `${lightCharge}%`;
+  if (lightCharge === 100) {
+    forestBright = true;
+    forest.classList.add('forest-bright');
+    forest.setAttribute('aria-label', '방울꽃으로 환하게 밝힌 숲');
+    document.querySelector('#flower-instructions').textContent = '방울꽃의 빛으로 숲을 환하게 밝혔어요!';
+    setTimeout(() => {
+      endPointer();
+      flowerMission.querySelector('#flower-mission-title').textContent = '고마워! 숲을 밝혀줬어!';
+      flowerMission.querySelector('p').textContent = '방울꽃의 빛으로 어두웠던 숲이 환해졌어요.';
+      flowerMission.querySelector('button').textContent = '숲 둘러보기';
+      flowerMission.showModal();
+    }, reducedMotion ? 0 : 1250);
+  }
+}
+
+function moveFlower(x, y, now) {
+  if (!trailPoint) { leaveLight(x, y); trailPoint = { x, y }; }
+  const dx = x - trailPoint.x, dy = y - trailPoint.y;
+  const length = Math.hypot(dx, dy);
+  const steps = Math.floor(length / 24);
+  if (steps > 0) {
+    const start = trailPoint;
+    for (let i = 1; i <= steps; i++) {
+      const fraction = i * 24 / length;
+      trailPoint = { x: start.x + dx * fraction, y: start.y + dy * fraction };
+      leaveLight(trailPoint.x, trailPoint.y);
+    }
+  }
+
+  if (!swingSample || now - swingSample.time > 320) {
+    swingSample = { x, y, time: now };
+    previousSwing = null;
+    return;
+  }
+  const swingX = x - swingSample.x, swingY = y - swingSample.y;
+  const distance = Math.hypot(swingX, swingY);
+  if (distance < 22) return;
+  const speed = distance / Math.max(1, now - swingSample.time);
+  const swing = { x: swingX / distance, y: swingY / distance };
+  swingSample = { x, y, time: now };
+  if (speed < .23) { previousSwing = null; return; }
+  if (previousSwing && swing.x * previousSwing.x + swing.y * previousSwing.y < -.48 && now - lastShake >= 70) {
+    shakeFlower(x, y, now, distance);
+  }
+  previousSwing = swing;
+}
+
+function drawFlowerSparks(now) {
+  flowerSparks = flowerSparks.filter(spark => now - spark.born < spark.life);
+  for (const spark of flowerSparks) {
+    const seconds = (now - spark.born) / 1000;
+    ctx.globalAlpha = (1 - (now - spark.born) / spark.life) ** 1.5;
+    ctx.fillStyle = spark.color;
+    ctx.shadowColor = spark.color; ctx.shadowBlur = 6;
+    ctx.beginPath();
+    ctx.arc(spark.x + spark.vx * seconds, spark.y + spark.vy * seconds + 27 * seconds ** 2, spark.size, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
+}
+
+function selectFairy(x, y) {
+  if (lensOpacity < .05) return false;
+  const selected = hiddenFairies.find(({ node }) => {
+    const { left, top, width, height } = node.getBoundingClientRect();
+    return x >= left + width * .13 && x <= left + width * .84 &&
+      y >= top + height * .01 && y <= top + height * .91;
   });
+  if (!selected) return false;
+  if (selected.found) return true;
+
+  selected.found = true;
+  selected.node.classList.add('is-found');
+  foundCount++;
+  fairyCount.textContent = `${foundCount}/${hiddenFairies.length}`;
+  fairyProgress.value = foundCount;
+  fairyMessage.textContent = '고마워! 요정을 찾았어!';
+  clearTimeout(messageTimer);
+  messageTimer = setTimeout(() => { fairyMessage.textContent = ''; }, 2600);
+  if (foundCount === hiddenFairies.length) setTimeout(showFlowerStage, 1000);
+  return true;
+}
+
+function drawFlowers(now) {
+  flowers = flowers.filter(flower => now - flower.born < 6200);
+  for (const flower of flowers) {
+    const age = now - flower.born;
+    const growth = reducedMotion ? 1 : .2 + .8 * (1 - (1 - Math.min(1, age / 720)) ** 3);
+    ctx.save();
+    ctx.translate(flower.x, flower.y);
+    ctx.rotate(flower.tilt);
+    ctx.scale(flower.size * growth, flower.size * growth);
+    ctx.globalAlpha = Math.min(1, age / 160) * Math.min(1, (6200 - age) / 2200);
+    ctx.strokeStyle = '#abdbb5'; ctx.lineWidth = 1.1;
+    ctx.beginPath(); ctx.moveTo(-3, 11); ctx.quadraticCurveTo(-3, 0, 0, -13); ctx.stroke();
+    ctx.fillStyle = '#91c3a5';
+    ctx.beginPath(); ctx.moveTo(-3, 7); ctx.quadraticCurveTo(-13, 5, -12, -2); ctx.quadraticCurveTo(-4, 0, -3, 7); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(-3, 8); ctx.quadraticCurveTo(0, 1, 7, 1); ctx.quadraticCurveTo(5, 7, -3, 8); ctx.fill();
+    ctx.translate(0, -13);
+    const petal = ctx.createLinearGradient(0, -10, 0, 10);
+    petal.addColorStop(0, '#e5c8ff'); petal.addColorStop(.6, '#a473ed'); petal.addColorStop(1, '#f1d8ff');
+    ctx.fillStyle = petal; ctx.strokeStyle = '#f4dfff'; ctx.lineWidth = .7;
+    ctx.shadowColor = '#b985ff'; ctx.shadowBlur = 11;
+    ctx.beginPath(); ctx.moveTo(0, -10);
+    ctx.bezierCurveTo(-7, -10, -7, -1, -10, 5);
+    ctx.quadraticCurveTo(-8, 9, -4, 7); ctx.quadraticCurveTo(0, 11, 4, 7); ctx.quadraticCurveTo(8, 9, 10, 5);
+    ctx.bezierCurveTo(7, -1, 7, -10, 0, -10); ctx.fill(); ctx.stroke();
+    ctx.shadowBlur = 0; ctx.strokeStyle = '#f5e7ffb0';
+    ctx.beginPath(); ctx.moveTo(-2, -6); ctx.quadraticCurveTo(-5, -2, -5, 4); ctx.stroke();
+    ctx.fillStyle = '#fff0d7'; ctx.beginPath(); ctx.arc(0, 9, 1.35, 0, Math.PI * 2); ctx.fill();
+    ctx.restore();
+  }
 }
 
 function updatePointer(event) {
   targetX = event.clientX; targetY = event.clientY;
-  if (!active) { lightX = targetX; lightY = targetY; fairyX = targetX + 40; fairyY = targetY - 40; }
   active = true;
   forest.style.setProperty('--pointer-x', `${targetX}px`);
   forest.style.setProperty('--pointer-y', `${targetY}px`);
 }
-function stopDrawing() {
-  pressed = false; previousPointer = null; lastStrokeTime = -Infinity;
+function endPointer() {
+  active = false;
+  clickStart = null;
+  resetFlowerMotion();
 }
 forest.addEventListener('pointerenter', event => {
-  if (!event.target.closest('button')) updatePointer(event);
+  if (!flowerMission.open && !event.target.closest('button')) updatePointer(event);
 });
 forest.addEventListener('pointerdown', event => {
-  if (event.button !== 0 || event.target.closest('button')) return;
+  if (flowerStage || event.button !== 0 || event.target.closest('button')) return;
   updatePointer(event);
-  pressed = true;
-  previousPointer = { x: targetX, y: targetY };
+  clickStart = { x: targetX, y: targetY, id: event.pointerId };
+});
+forest.addEventListener('pointerup', event => {
+  if (!clickStart || clickStart.id !== event.pointerId) return;
+  const start = clickStart; clickStart = null;
+  if (event.button === 0 && !event.target.closest('button') &&
+      Math.hypot(event.clientX - start.x, event.clientY - start.y) <= 7) {
+    updatePointer(event);
+    if (!selectFairy(event.clientX, event.clientY)) {
+      plantFlower(event.clientX, event.clientY, performance.now());
+    }
+  }
 });
 forest.addEventListener('pointermove', event => {
-  if (event.target.closest('button')) { stopDrawing(); return; }
-  const moved = Math.hypot(event.clientX - targetX, event.clientY - targetY) > 0;
+  if (flowerMission.open || event.target.closest('button')) { endPointer(); return; }
+  const moved = event.clientX !== targetX || event.clientY !== targetY;
   updatePointer(event);
-  if (moved) {
-    lastMotionTime = performance.now();
-    if (!hasMoved) { hasMoved = true; setTimeout(() => hint.classList.add('hidden'), 3500); }
+  if (flowerStage) {
+    if (!forestBright && moved) moveFlower(targetX, targetY, performance.now());
+    return;
   }
-  if (!pressed || !(event.buttons & 1)) { stopDrawing(); return; }
-  const now = performance.now();
-  if (previousPointer) {
-    const dx = targetX - previousPointer.x, dy = targetY - previousPointer.y;
-    const distance = Math.hypot(dx, dy);
-    if (distance > 0) lastStrokeTime = now;
-    const count = distance > 0 ? Math.min(90, Math.max(1, Math.ceil(distance / (reducedMotion ? 12 : 2)))) : 0;
-    for (let i = 1; i <= count; i++) emit(previousPointer.x + dx * i / count, previousPointer.y + dy * i / count, now);
-  }
-  previousPointer = { x: targetX, y: targetY };
-  if (particles.length > 1000) particles.splice(0, particles.length - 1000);
+  if (clickStart && Math.hypot(targetX - clickStart.x, targetY - clickStart.y) > 7) clickStart = null;
+  if (moved && !hasMoved) { hasMoved = true; setTimeout(() => hint.classList.add('hidden'), 3500); }
 });
-forest.addEventListener('pointerleave', () => { active = false; stopDrawing(); });
+forest.addEventListener('pointerleave', endPointer);
 addEventListener('pointerup', event => {
-  if (!(event.buttons & 1)) stopDrawing();
-  if (event.pointerType !== 'mouse') active = false;
+  clickStart = null;
+  if (event.pointerType !== 'mouse') endPointer();
 });
-addEventListener('pointercancel', () => { active = false; stopDrawing(); });
-addEventListener('blur', () => { active = false; stopDrawing(); });
+addEventListener('pointercancel', endPointer);
+addEventListener('blur', endPointer);
 
 function animate(now) {
   const dt = Math.min((now - lastTime) / 1000, .05); lastTime = now;
-  const follow = reducedMotion ? 1 : 1 - Math.exp(-22 * dt);
-  lightX += (targetX - lightX) * follow; lightY += (targetY - lightY) * follow;
-  const moving = active && now - lastMotionTime < 220;
-  power += ((moving ? 1 : 0) - power) * (1 - Math.exp(-(moving ? 3.2 : .95) * dt));
-  const fairyFollow = reducedMotion ? 1 : 1 - Math.exp(-6 * dt);
-  fairyX += (Math.max(fairyHalfWidth, Math.min(width - fairyHalfWidth, targetX + 40)) - fairyX) * fairyFollow;
-  fairyY += (Math.max(fairyHalfHeight + 3, Math.min(height - fairyHalfHeight - 3, targetY - 40)) - fairyY) * fairyFollow;
-  const bob = reducedMotion ? 0 : Math.sin(now / 220) * 3;
-  fairy.style.transform = `translate3d(${(fairyX - fairyHalfWidth).toFixed(1)}px, ${(fairyY - fairyHalfHeight + bob).toFixed(1)}px, 0)`;
-  const drawing = pressed && now - lastStrokeTime < 140;
-  strokePower += ((drawing ? 1 : 0) - strokePower) * (1 - Math.exp(-10 * dt));
-  forest.style.setProperty('--x', `${lightX.toFixed(1)}px`);
-  forest.style.setProperty('--y', `${lightY.toFixed(1)}px`);
-  forest.style.setProperty('--power', power.toFixed(3));
-  forest.style.setProperty('--stroke', strokePower.toFixed(3));
+  lensOpacity += ((active ? 1 : 0) - lensOpacity) * (1 - Math.exp(-12 * dt));
+  forest.style.setProperty('--lens-opacity', lensOpacity.toFixed(3));
   ctx.clearRect(0, 0, width, height);
-  particles = particles.filter(p => now - p.born < p.life);
-  for (const p of particles) {
-    const age = (now - p.born) / p.life;
-    p.x += (p.vx + Math.sin(now / 1100 + p.phase) * 5) * dt;
-    p.y += p.vy * dt;
-    ctx.globalAlpha = Math.min(1, age * 12) * (1 - age) ** 1.2 * .95;
-    ctx.fillStyle = p.color; ctx.shadowColor = p.color; ctx.shadowBlur = 6;
-    ctx.beginPath(); ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2); ctx.fill();
+  if (flowerStage) {
+    drawFlowerSparks(now);
+  } else {
+    updateChime(now);
+    drawFlowers(now);
   }
-  ctx.globalAlpha = 1; ctx.shadowBlur = 0;
   requestAnimationFrame(animate);
 }
 requestAnimationFrame(animate);

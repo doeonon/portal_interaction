@@ -2,11 +2,15 @@ const fs = require('node:fs');
 const path = require('node:path');
 const read = file => fs.readFileSync(path.join(__dirname, file), 'utf8');
 let html = read('index.html');
-const image = fs.readFileSync(path.join(__dirname, 'assets/secret-forest.png')).toString('base64');
-const css = read('style.css').replace('assets/secret-forest.png', `data:image/png;base64,${image}`);
+const image = fs.readFileSync(path.join(__dirname, 'forest2.png')).toString('base64');
+const brightForest = fs.readFileSync(path.join(__dirname, 'forest1.png')).toString('base64');
+const css = read('style.css').replace('forest2.png', `data:image/png;base64,${image}`)
+  .replace('forest1.png', `data:image/png;base64,${brightForest}`);
 html = html.replace('<link rel="stylesheet" href="style.css">', `<style>\n${css}\n</style>`);
 const fairyImage = fs.readFileSync(path.join(__dirname, 'assets/fairy.png')).toString('base64');
 html = html.replace('src="assets/fairy.png"', `src="data:image/png;base64,${fairyImage}"`);
+const flowerImage = fs.readFileSync(path.join(__dirname, 'flower.png')).toString('base64');
+html = html.replace('src="flower.png"', `src="data:image/png;base64,${flowerImage}"`);
 const scripts = ['vendor/face-api/face-api.min.js', 'vendor/face-api/model-data.js', 'forest.js', 'webcam.js', 'background.js'];
 for (const file of scripts) {
   let source = read(file);

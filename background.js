@@ -1,6 +1,7 @@
 const backgroundButton = document.querySelector('#background-button');
 const backgroundReset = document.querySelector('#background-reset');
 const backgroundFile = document.querySelector('#background-file');
+const backgroundLayers = document.querySelectorAll('.scene');
 let backgroundUrl = null, backgroundVersion = 0;
 
 backgroundButton.addEventListener('click', () => backgroundFile.click());
@@ -14,7 +15,7 @@ backgroundFile.addEventListener('change', async () => {
   try {
     await image.decode();
     if (version !== backgroundVersion) { URL.revokeObjectURL(url); return; }
-    forest.style.setProperty('--forest-image', `url("${url}")`);
+    backgroundLayers.forEach(layer => { layer.style.backgroundImage = `url("${url}")`; });
     if (backgroundUrl) URL.revokeObjectURL(backgroundUrl);
     backgroundUrl = url;
     backgroundReset.hidden = false;
@@ -26,7 +27,7 @@ backgroundFile.addEventListener('change', async () => {
 });
 backgroundReset.addEventListener('click', () => {
   backgroundVersion++;
-  forest.style.removeProperty('--forest-image');
+  backgroundLayers.forEach(layer => { layer.style.removeProperty('background-image'); });
   if (backgroundUrl) URL.revokeObjectURL(backgroundUrl);
   backgroundUrl = null;
   backgroundReset.hidden = true;

@@ -87,6 +87,6 @@ function setup(getUserMedia) {
   scripts.forEach(script => new vm.Script(script[1]));
   assert.equal(scripts[3][1].trim(), fs.readFileSync(path.join(root, 'webcam.js'), 'utf8').trim());
   const image = html.match(/data:image\/png;base64,([A-Za-z0-9+/=]+)/);
-  assert(Buffer.from(image[1], 'base64').equals(fs.readFileSync(path.join(root, 'assets/secret-forest.png'))));
+  assert(Buffer.from(image[1], 'base64').equals(fs.readFileSync(path.join(root, 'forest2.png'))));
   console.log('PASS: zoomed face crop, mirroring, face loss, camera off, permission denial, late grant, late detection, standalone HTML');
 })().catch(error => { console.error(error); process.exitCode = 1; });

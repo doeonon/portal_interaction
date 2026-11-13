@@ -54,7 +54,7 @@ async function detectFace(session) {
           for (const key of ['x', 'y', 'width', 'height']) faceBox[key] += (box[key] - faceBox[key]) * .35;
         }
         faceSeenAt = performance.now();
-        setCameraStatus('얼굴을 찾았어요! 마우스를 움직여 나만의 요정을 만나보세요.');
+        setCameraStatus('얼굴을 찾았어요! 돋보기로 내 얼굴을 한 요정을 찾아보세요.');
       } else if (performance.now() - faceSeenAt > 800) {
         faceBox = null;
         fairy.classList.remove('has-face');

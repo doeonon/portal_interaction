@@ -13,7 +13,9 @@ const publicFiles = new Map([
   ['/background.js', ['background.js', 'text/javascript; charset=utf-8']],
   ['/vendor/face-api/face-api.min.js', ['vendor/face-api/face-api.min.js', 'text/javascript; charset=utf-8']],
   ['/vendor/face-api/model-data.js', ['vendor/face-api/model-data.js', 'text/javascript; charset=utf-8']],
-  ['/assets/secret-forest.png', ['assets/secret-forest.png', 'image/png']],
+  ['/forest2.png', ['forest2.png', 'image/png']],
+  ['/forest1.png', ['forest1.png', 'image/png']],
+  ['/flower.png', ['flower.png', 'image/png']],
   ['/assets/fairy.png', ['assets/fairy.png', 'image/png']]
 ]);
 function openChrome() {
